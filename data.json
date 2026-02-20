@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Person A",
+    "birth": "1900-01-01",
+    "start": "2010-06-01",
+    "end": "2012-03-10",
+    "country": "Country X",
+    "note": "became oldest-known living person"
+  },
+  {
+    "name": "Person B",
+    "birth": "1901-05-12",
+    "start": "2012-03-10",
+    "end": null,
+    "country": "Country Y"
+  }
+]
