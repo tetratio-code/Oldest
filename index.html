@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>在世最長壽者：日期 × 年齡（世界最高齡在世者時間序列）</title>
+  <title>在世最長壽者：日期 × 年齡（讀取 data.json）</title>
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <style>
     :root { --fg:#111; --muted:#666; --bg:#fff; --card:#fafafa; --border:#e7e7e7; }
@@ -21,24 +21,23 @@
     .tooltip{
       position: fixed; pointer-events:none; opacity:0;
       background: rgba(20,20,20,.92); color: #fff;
-      padding: 10px 12px; border-radius: 10px; max-width: 340px;
+      padding: 10px 12px; border-radius: 10px; max-width: 360px;
       font-size: 12px; line-height: 1.35;
       transform: translate(10px, 10px);
       box-shadow: 0 12px 30px rgba(0,0,0,.18);
     }
     .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0 0; }
     .pill{ font-size:12px; color:var(--muted); background:#fff; border:1px solid var(--border); border-radius:999px; padding:6px 10px; }
-    .error{ color:#b00020; font-size: 13px; margin-top: 10px; }
-    a{ color: inherit; }
+    .error{ white-space: pre-wrap; color:#b00020; font-size: 13px; margin-top: 10px; }
+    code{ background:#f3f3f3; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>在世最長壽者（世界最高齡在世者）年齡視覺化</h1>
     <p class="sub">
-      橫軸：日期｜縱軸：該日期的年齡（以年為單位；年齡 = (日期 − 出生日期) / 365.2425）
-      <br/>
-      資料來源：Wikipedia〈Oldest people〉→「Chronological list of the oldest-known living people since 1951」表格（即時抓取）。開啟檔案需網路。
+      讀取 <code>data.json</code>（同資料夾）<br/>
+      橫軸：日期｜縱軸：該日期年齡（年齡 = (日期 − 出生日期) / 365.2425）
     </p>
 
     <div class="card">
@@ -46,16 +45,18 @@
       <div id="chart"></div>
       <div class="error" id="err" style="display:none;"></div>
     </div>
+
+    <p class="sub" style="margin-top:14px;">
+      若你直接雙擊開啟（file://）而出現 fetch 失敗，請用本機伺服器：<br/>
+      macOS/Linux：<code>python3 -m http.server 8000</code>　Windows：<code>python -m http.server 8000</code><br/>
+      然後瀏覽器開 <code>http://localhost:8000</code>
+    </p>
   </div>
 
   <div class="tooltip" id="tooltip"></div>
 
   <script>
-    // 以 Wikipedia API（允許 CORS）抓「Oldest people」頁面的第 3 節（該節通常是：Chronological list ... since 1951）
-    // 若 Wikipedia 調整章節編號，請把 SECTION 改成正確的 section index。
-    const WIKI_API = "https://en.wikipedia.org/w/api.php?origin=*&action=parse&format=json&page=Oldest_people&prop=text";
-    const SECTION = 3; // Chronological list of the oldest-known living people since 1951（目前頁面結構如此）
-
+    const DATA_URL = "./data.json";
     const DAYS_PER_YEAR = 365.2425;
 
     const tooltip = d3.select("#tooltip");
@@ -66,123 +67,63 @@
       errBox.style("display","block").text(msg);
     }
 
-    // 解析英文日期：例如 "28 April 1951" / "7 Oct 1959" / "19 February 2026"
-    function parseEnDate(s){
-      if (!s) return null;
-      s = s.replace(/\[[^\]]+\]/g, "").trim(); // 移除 [1] 參考註記
-      if (!s) return null;
-
-      // 有些可能是 "Unknown" 或 "—"
-      if (/^(unknown|n\/a|—|-|na)$/i.test(s)) return null;
-
-      // 統一空白
-      s = s.replace(/\s+/g, " ");
-
-      const months = {
-        january:0,february:1,march:2,april:3,may:4,june:5,
-        july:6,august:7,september:8,october:9,november:10,december:11
-      };
-
-      // 1) "28 April 1951"
-      let m = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
-      if (m){
-        const d = +m[1], mon = months[m[2].toLowerCase()], y = +m[3];
-        if (Number.isInteger(mon)) return new Date(Date.UTC(y, mon, d));
-      }
-
-      // 2) "April 28, 1951"（備援）
-      m = s.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
-      if (m){
-        const mon = months[m[1].toLowerCase()], d = +m[2], y = +m[3];
-        if (Number.isInteger(mon)) return new Date(Date.UTC(y, mon, d));
-      }
-
-      // 3) 直接 Date.parse 備援（不保證）
-      const t = Date.parse(s);
-      if (!Number.isNaN(t)) return new Date(t);
-
-      return null;
+    // 安全解析 YYYY-MM-DD（用 UTC 避免時區偏移）
+    function parseISODate(s){
+      if (s === null || s === undefined) return null;
+      if (typeof s !== "string") return null;
+      const m = s.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const y = +m[1], mo = +m[2]-1, d = +m[3];
+      return new Date(Date.UTC(y, mo, d));
     }
 
-    function yearsBetween(dateA, dateB){
-      return (dateB - dateA) / (1000*60*60*24) / DAYS_PER_YEAR;
+    function yearsBetween(birth, date){
+      return (date - birth) / (1000*60*60*24) / DAYS_PER_YEAR;
     }
 
-    // 從 lifespan 欄位解析出生日期：形如 "3 May 1841 – 28 April 1951" 或 "... – Living"
-    function parseBirthFromLifespan(text){
-      if (!text) return null;
-      const cleaned = text.replace(/\[[^\]]+\]/g, "").replace(/\s+/g, " ").trim();
-      // split on en dash / em dash / hyphen
-      const parts = cleaned.split(/\s*[–—-]\s*/);
-      if (parts.length >= 1){
-        return parseEnDate(parts[0].trim());
-      }
-      return null;
+    function fmtDateTW(d){
+      return new Intl.DateTimeFormat("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
     }
 
-    async function fetchChronology(){
-      const url = `${WIKI_API}&section=${SECTION}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Fetch failed: HTTP ${res.status}`);
-      const json = await res.json();
-      const html = json?.parse?.text?.["*"];
-      if (!html) throw new Error("Wikipedia API response missing parse.text");
+    function validateAndNormalize(raw){
+      if (!Array.isArray(raw)) throw new Error("data.json 必須是一個陣列（Array）。");
 
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      const table = doc.querySelector("table.wikitable");
-      if (!table) throw new Error("Cannot find wikitable in the specified section (section index may have changed).");
+      const today = new Date();
+      const segs = [];
 
-      // 找表頭位置，確保欄位對應
-      const headerCells = Array.from(table.querySelectorAll("tr th")).map(th => th.textContent.trim().toLowerCase());
+      raw.forEach((r, idx) => {
+        const name = (r?.name ?? "").toString().trim();
+        const birth = parseISODate(r?.birth);
+        const start = parseISODate(r?.start);
+        const end = (r?.end === null || r?.end === undefined) ? today : parseISODate(r?.end);
 
-      // 期望包含：from / name / lifespan（或 birth–death）
-      // 實務上用固定欄位順序來取：From(0), Duration(1), Name(2), Sex(3), Age(s)(4), Lifespan(5), Place(6)
-      const rows = Array.from(table.querySelectorAll("tr")).slice(1);
-      const entries = [];
+        if (!name) throw new Error(`第 ${idx+1} 筆缺少 name。`);
+        if (!birth) throw new Error(`第 ${idx+1} 筆 birth 日期格式錯誤，需 YYYY-MM-DD。`);
+        if (!start) throw new Error(`第 ${idx+1} 筆 start 日期格式錯誤，需 YYYY-MM-DD。`);
+        if (!end) throw new Error(`第 ${idx+1} 筆 end 日期格式錯誤，需 YYYY-MM-DD 或 null。`);
+        if (end <= start) throw new Error(`第 ${idx+1} 筆 end 必須晚於 start。`);
+        if (start <= birth) throw new Error(`第 ${idx+1} 筆 start 必須晚於 birth（不合理）。`);
 
-      for (const tr of rows){
-        const tds = Array.from(tr.querySelectorAll("td"));
-        if (tds.length < 6) continue;
-
-        const fromText = tds[0].textContent.trim();
-        const nameCell = tds[2];
-        const name = nameCell.textContent.replace(/\[[^\]]+\]/g,"").trim();
-
-        // lifespan 通常在第 5 欄
-        const lifespanText = tds[5].textContent.trim();
-
-        const fromDate = parseEnDate(fromText);
-        const birthDate = parseBirthFromLifespan(lifespanText);
-
-        if (!name || !fromDate || !birthDate) continue;
-
-        entries.push({
-          fromDate,
+        segs.push({
           name,
-          birthDate,
-          lifespanText: lifespanText.replace(/\s+/g," ").trim()
+          country: r?.country ? String(r.country) : "",
+          note: r?.note ? String(r.note) : "",
+          birth, start, end,
+          ageStart: yearsBetween(birth, start),
+          ageEnd: yearsBetween(birth, end)
         });
-      }
+      });
 
-      // 依 fromDate 排序並去除無效
-      entries.sort((a,b) => a.fromDate - b.fromDate);
+      // 按 start 排序（時間序列）
+      segs.sort((a,b) => a.start - b.start);
 
-      // 建立區間：每段從 entries[i].fromDate 到 entries[i+1].fromDate；最後一段到「今天」
-      const today = new Date(); // local
-      const segments = entries.map((e, i) => {
-        const start = e.fromDate;
-        const end = (i < entries.length - 1) ? entries[i+1].fromDate : today;
-        const ageStart = yearsBetween(e.birthDate, start);
-        const ageEnd = yearsBetween(e.birthDate, end);
-        return { ...e, start, end, ageStart, ageEnd };
-      }).filter(s => s.end > s.start);
-
-      return { segments, fetchedAt: new Date(), sourceUrl: "https://en.wikipedia.org/wiki/Oldest_people" };
+      return segs;
     }
 
-    function draw({segments, fetchedAt, sourceUrl}){
+    function draw(segments){
       d3.select("#chart").selectAll("*").remove();
       meta.selectAll("*").remove();
+      errBox.style("display","none").text("");
 
       const container = document.getElementById("chart");
       const width = Math.max(340, container.clientWidth);
@@ -192,12 +133,9 @@
       const innerW = width - margin.left - margin.right;
       const innerH = height - margin.top - margin.bottom;
 
-      // 顯示一些 meta 資訊
-      const fmtDate = d => new Intl.DateTimeFormat("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
+      // meta
       meta.append("div").attr("class","pill").text(`段數：${segments.length}`);
-      meta.append("div").attr("class","pill").text(`資料抓取：${fmtDate(fetchedAt)}`);
-      meta.append("div").attr("class","pill")
-        .html(`來源：<a href="${sourceUrl}" target="_blank" rel="noopener">Wikipedia / Oldest people</a>`);
+      meta.append("div").attr("class","pill").text(`區間：${fmtDateTW(d3.min(segments, d=>d.start))} → ${fmtDateTW(d3.max(segments, d=>d.end))}`);
 
       const svg = d3.select("#chart")
         .append("svg")
@@ -208,52 +146,49 @@
       const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
       const x = d3.scaleTime()
-        .domain([
-          d3.min(segments, s => s.start),
-          d3.max(segments, s => s.end)
-        ])
+        .domain([d3.min(segments, d=>d.start), d3.max(segments, d=>d.end)])
         .nice()
         .range([0, innerW]);
 
       const y = d3.scaleLinear()
         .domain([
-          d3.min(segments, s => Math.min(s.ageStart, s.ageEnd)) - 0.3,
-          d3.max(segments, s => Math.max(s.ageStart, s.ageEnd)) + 0.3
+          d3.min(segments, d=>Math.min(d.ageStart, d.ageEnd)) - 0.3,
+          d3.max(segments, d=>Math.max(d.ageStart, d.ageEnd)) + 0.3
         ])
         .nice()
         .range([innerH, 0]);
 
-      // Grid
+      // grid
       g.append("g")
-        .attr("class", "grid")
+        .attr("class","grid")
         .call(d3.axisLeft(y).ticks(8).tickSize(-innerW).tickFormat(""));
 
-      // Axes
+      // axes
       g.append("g")
-        .attr("class", "axis")
+        .attr("class","axis")
         .attr("transform", `translate(0,${innerH})`)
         .call(d3.axisBottom(x).ticks(7));
 
       g.append("g")
-        .attr("class", "axis")
+        .attr("class","axis")
         .call(d3.axisLeft(y).ticks(8));
 
-      // Labels
+      // labels
       g.append("text")
-        .attr("class", "label")
+        .attr("class","label")
         .attr("x", innerW)
         .attr("y", innerH + 40)
         .attr("text-anchor", "end")
         .text("日期");
 
       g.append("text")
-        .attr("class", "label")
+        .attr("class","label")
         .attr("x", -8)
         .attr("y", -6)
         .attr("text-anchor", "start")
         .text("年齡（年）");
 
-      // 每段畫一條線（避免換人時連成一條不合理的折線）
+      // segments as lines
       const segG = g.append("g");
 
       segG.selectAll("line.segment")
@@ -268,21 +203,21 @@
         .attr("stroke-width", 2)
         .attr("stroke-linecap", "round")
         .on("mousemove", (event, d) => {
-          const at = new Date(Math.min(d.end, new Date(event.timeStamp))); // fallback，不重要
           tooltip
             .style("opacity", 1)
             .style("left", event.clientX + "px")
             .style("top", event.clientY + "px")
             .html(`
               <div style="font-weight:700; margin-bottom:6px;">${d.name}</div>
-              <div>區間：${fmtDate(d.start)} → ${fmtDate(d.end)}</div>
-              <div>年齡：${d.ageStart.toFixed(3)} → ${d.ageEnd.toFixed(3)}（年）</div>
-              <div style="opacity:.85;">Lifespan：${d.lifespanText}</div>
+              <div>區間：${fmtDateTW(d.start)} → ${fmtDateTW(d.end)}</div>
+              <div>年齡：${d.ageStart.toFixed(3)} → ${d.ageEnd.toFixed(3)} 年</div>
+              ${d.country ? `<div style="opacity:.85;">地區：${d.country}</div>` : ""}
+              ${d.note ? `<div style="opacity:.85;">註記：${d.note}</div>` : ""}
             `);
         })
         .on("mouseleave", () => tooltip.style("opacity", 0));
 
-      // 轉換點（每段開始畫點，方便看「何時換人」）
+      // change points at each start
       segG.selectAll("circle.point")
         .data(segments)
         .join("circle")
@@ -300,9 +235,9 @@
             .style("top", event.clientY + "px")
             .html(`
               <div style="font-weight:700; margin-bottom:6px;">${d.name}</div>
-              <div>成為最高齡在世者：${fmtDate(d.start)}</div>
+              <div>開始日期：${fmtDateTW(d.start)}</div>
               <div>當天年齡：約 ${d.ageStart.toFixed(3)} 年</div>
-              <div style="opacity:.85;">出生：${fmtDate(d.birthDate)}</div>
+              <div style="opacity:.85;">出生：${fmtDateTW(d.birth)}</div>
             `);
         })
         .on("mouseleave", () => tooltip.style("opacity", 0));
@@ -310,16 +245,20 @@
 
     async function main(){
       try{
-        const { segments, fetchedAt, sourceUrl } = await fetchChronology();
-        draw({ segments, fetchedAt, sourceUrl });
+        const res = await fetch(DATA_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error(`fetch ${DATA_URL} 失敗：HTTP ${res.status}`);
+        const raw = await res.json();
+        const segments = validateAndNormalize(raw);
+        draw(segments);
       }catch(e){
         console.error(e);
         showError(
-          "抓取/解析 Wikipedia 表格失敗：\n" +
+          "讀取/解析 data.json 失敗：\n" +
           (e?.message || String(e)) +
-          "\n\n你可以：\n" +
-          "1) 檢查網路是否可連到 Wikipedia\n" +
-          "2) 若 Wikipedia 調整章節結構，將程式最上方 SECTION 改成正確的 section index"
+          "\n\n檢查：\n" +
+          "1) index.html 與 data.json 是否同資料夾\n" +
+          "2) 是否用 http://localhost 方式開啟（不要 file://）\n" +
+          "3) 日期是否為 YYYY-MM-DD，end 可為 null"
         );
       }
     }
