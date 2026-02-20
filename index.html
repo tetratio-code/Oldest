@@ -87,36 +87,78 @@
 
     function validateAndNormalize(raw){
       if (!Array.isArray(raw)) throw new Error("data.json 必須是一個陣列（Array）。");
-
+    
+      const SERIES_START = parseISODate("1951-01-01");
       const today = new Date();
-      const segs = [];
-
-      raw.forEach((r, idx) => {
+    
+      // 先把每筆基本欄位解析好（暫時不採用 start）
+      const items = raw.map((r, idx) => {
         const name = (r?.name ?? "").toString().trim();
         const birth = parseISODate(r?.birth);
-        const start = parseISODate(r?.start);
-        const end = (r?.end === null || r?.end === undefined) ? today : parseISODate(r?.end);
-
+        const end = (r?.end === null || r?.end === undefined) ? null : parseISODate(r?.end);
+    
         if (!name) throw new Error(`第 ${idx+1} 筆缺少 name。`);
         if (!birth) throw new Error(`第 ${idx+1} 筆 birth 日期格式錯誤，需 YYYY-MM-DD。`);
-        if (!start) throw new Error(`第 ${idx+1} 筆 start 日期格式錯誤，需 YYYY-MM-DD。`);
-        if (!end) throw new Error(`第 ${idx+1} 筆 end 日期格式錯誤，需 YYYY-MM-DD 或 null。`);
-        if (end <= start) throw new Error(`第 ${idx+1} 筆 end 必須晚於 start。`);
-        if (start <= birth) throw new Error(`第 ${idx+1} 筆 start 必須晚於 birth（不合理）。`);
-
-        segs.push({
+        if (r?.end === undefined) throw new Error(`第 ${idx+1} 筆缺少 end（可為 null）。`);
+        if (end === null) {
+          // ok: still living oldest-known
+        } else if (!end) {
+          throw new Error(`第 ${idx+1} 筆 end 日期格式錯誤，需 YYYY-MM-DD 或 null。`);
+        }
+    
+        return {
           name,
           country: r?.country ? String(r.country) : "",
           note: r?.note ? String(r.note) : "",
-          birth, start, end,
-          ageStart: yearsBetween(birth, start),
-          ageEnd: yearsBetween(birth, end)
-        });
+          birth,
+          endRaw: end, // Date 或 null
+          // 先保留原 start（若你想在 tooltip 顯示對照也行）
+          startProvided: r?.start ?? null
+        };
       });
-
-      // 按 start 排序（時間序列）
-      segs.sort((a,b) => a.start - b.start);
-
+    
+      // 依序「用前一筆 end 當下一筆 start」
+      const segs = [];
+      let currentStart = SERIES_START;
+    
+      for (let i = 0; i < items.length; i++){
+        const it = items[i];
+        const start = currentStart;
+    
+        const end = (it.endRaw === null) ? today : it.endRaw;
+    
+        if (end <= start) {
+          throw new Error(`第 ${i+1} 筆 end 必須晚於其計算出的 start（start=${start.toISOString().slice(0,10)}）。`);
+        }
+        if (start <= it.birth) {
+          throw new Error(`第 ${i+1} 筆 start 必須晚於 birth（不合理）。`);
+        }
+    
+        const ageStart = yearsBetween(it.birth, start);
+        const ageEnd = yearsBetween(it.birth, end);
+    
+        segs.push({
+          name: it.name,
+          country: it.country,
+          note: it.note,
+          birth: it.birth,
+          start,
+          end,
+          ageStart,
+          ageEnd
+        });
+    
+        // 下一筆 start = 這一筆的「原始 end」（如果是 null，代表已到今天，後面不該再有資料）
+        if (it.endRaw === null) {
+          if (i !== items.length - 1) {
+            throw new Error(`第 ${i+1} 筆 end 是 null（代表延伸到今天），但後面仍有第 ${i+2} 筆資料，時間序列不一致。`);
+          }
+          break;
+        } else {
+          currentStart = it.endRaw;
+        }
+      }
+    
       return segs;
     }
 
