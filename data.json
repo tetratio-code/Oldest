@@ -9,5 +9,8 @@
   { "name": "Robert Early", "birth": "1849-10-08", "end": "1960-10-09", "country": "United States", "note": "Male" },
   { "name": "Nettie Minick", "birth": "1851-04-03", "end": "1960-11-28", "country": "United States" },
   { "name": "Mary Kelly", "birth": "1851-06-07", "end": "1964-12-30", "country": "United States" },
-  { "name": "James King", "birth": "1854-11-15", "end": "1967-06-05", "country": "United States", "note": "Male" }
+  { "name": "James King", "birth": "1854-11-15", "end": "1967-06-05", "country": "United States", "note": "Male" },
+  { "name": "Narcissa Rickman", "birth": "1855-09-13", "end": "1968-10-21", "country": "United States" },
+  { "name": "Marie Bernátková", "birth": "1857-10-22", "end": "1969-05-04", "country": "Czechoslovakia" },
+  { "name": "Ada Roe", "birth": "1858-02-06", "end": "1970-01-11", "country": "Czechoslovakia" }
 ]
