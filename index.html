@@ -12,11 +12,7 @@
     h1{ font-size: 20px; margin: 0 0 8px; }
     .sub{ color: var(--muted); margin: 0 0 14px; line-height: 1.55; }
     .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px; }
-    #chartWrap{
-      width: 100%;
-      overflow: hidden; /* 圖表本身用 d3 zoom/pan，不靠 scrollbar */
-      border-radius: 12px;
-    }
+    #chartWrap{ width: 100%; overflow: hidden; border-radius: 12px; }
     #chart{ width: 100%; }
     .axis text{ fill: var(--muted); font-size: 12px; }
     .axis path, .axis line{ stroke: #d9d9d9; }
@@ -26,7 +22,7 @@
     .tooltip{
       position: fixed; pointer-events:none; opacity:0;
       background: rgba(20,20,20,.92); color: #fff;
-      padding: 10px 12px; border-radius: 10px; max-width: 360px;
+      padding: 10px 12px; border-radius: 10px; max-width: 380px;
       font-size: 12px; line-height: 1.35;
       transform: translate(10px, 10px);
       box-shadow: 0 12px 30px rgba(0,0,0,.18);
@@ -36,20 +32,33 @@
     .error{ white-space: pre-wrap; color:#b00020; font-size: 13px; margin-top: 10px; }
     code{ background:#f3f3f3; padding: 2px 6px; border-radius: 6px; }
     .hint{ user-select:none; }
+    .selectionBox{
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--fg);
+      display:none;
+    }
+    .selectionBox .title{ font-weight: 700; margin-bottom: 6px; }
+    .selectionBox .muted{ color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>在世最長壽者（世界最高齡在世者）年齡視覺化</h1>
     <p class="sub hint">
-      讀取 <code>data.json</code>（同資料夾）<br/>
-      橫軸：日期（可拖曳平移；滾輪可縮放）｜縱軸：該日期年齡（年齡 = (日期 − 出生日期) / 365.2425）<br/>
-      規則：起點固定 <code>1951-01-01</code>；每筆 start = 前一筆 end；只在 end（最高點）畫圓點；Male 以藍色顯示
+      讀取 <code>data.json</code> 與 <code>country_colors.json</code>（同資料夾）<br/>
+      橫軸：日期（拖曳平移；滾輪縮放）｜縱軸：年齡（年）<br/>
+      規則：起點固定 <code>1951-01-01</code>；每筆 start = 前一筆 end；只在 end（最高點）畫點；Male 的點為<strong>實心</strong>
     </p>
 
     <div class="card">
       <div class="row" id="meta"></div>
       <div id="chartWrap"><div id="chart"></div></div>
+      <div class="selectionBox" id="selectionBox"></div>
       <div class="error" id="err" style="display:none;"></div>
     </div>
 
@@ -64,6 +73,7 @@
 
   <script>
     const DATA_URL = "./data.json";
+    const COLORS_URL = "./country_colors.json";
     const DAYS_PER_YEAR = 365.2425;
     const SERIES_START_STR = "1951-01-01";
     const WINDOW_YEARS = 10; // 預設視窗約 10 年
@@ -71,9 +81,26 @@
     const tooltip = d3.select("#tooltip");
     const meta = d3.select("#meta");
     const errBox = d3.select("#err");
+    const selectionBox = d3.select("#selectionBox");
 
     function showError(msg){
       errBox.style("display","block").text(msg);
+    }
+
+    function showSelection(d){
+      selectionBox
+        .style("display","block")
+        .html(`
+          <div class="title">${d.name}${d.male ? "（Male）" : ""}</div>
+          <div>區間：${fmtDateTW(d.start)} → ${fmtDateTW(d.end)}</div>
+          <div>年齡：${d.ageStart.toFixed(3)} → ${d.ageEnd.toFixed(3)} 年</div>
+          ${d.country ? `<div>國家：${d.country}</div>` : ""}
+          ${d.note ? `<div>註記：${d.note}</div>` : ""}
+          <div class="muted" style="margin-top:6px;">提示：按 ESC 或點空白處可關閉</div>
+        `);
+    }
+    function hideSelection(){
+      selectionBox.style("display","none").html("");
     }
 
     // 安全解析 YYYY-MM-DD（用 UTC 避免時區偏移）
@@ -120,7 +147,7 @@
 
         return {
           name,
-          country: r?.country ? String(r.country) : "",
+          country: r?.country ? String(r.country) : "Unknown",
           note: r?.note ? String(r.note) : "",
           birth,
           endRaw: end // Date 或 null
@@ -170,7 +197,26 @@
       return segs;
     }
 
-    function draw(segments){
+    function buildColorFn(segments, countryColors){
+      // fallback 色盤（當 country_colors.json 沒有該國）
+      const countries = Array.from(new Set(segments.map(d => d.country || "Unknown")));
+      const fallback = d3.scaleOrdinal()
+        .domain(countries)
+        .range(d3.schemeTableau10.concat(d3.schemeSet3).concat(d3.schemePaired));
+
+      return function colorOfCountry(country){
+        const key = (country && String(country)) || "Unknown";
+        const v = countryColors?.[key];
+        if (typeof v === "string" && v.trim()) return v.trim();
+        // 也允許用「主國名」fallback（去掉括號）
+        const base = key.replace(/\s*\([^)]*\)\s*/g, "").trim();
+        const v2 = countryColors?.[base];
+        if (typeof v2 === "string" && v2.trim()) return v2.trim();
+        return fallback(key);
+      };
+    }
+
+    function draw(segments, colorOfCountry){
       d3.select("#chart").selectAll("*").remove();
       meta.selectAll("*").remove();
       errBox.style("display","none").text("");
@@ -183,29 +229,18 @@
       const innerW = width - margin.left - margin.right;
       const innerH = height - margin.top - margin.bottom;
 
-      // meta
       meta.append("div").attr("class","pill").text(`段數：${segments.length}`);
       meta.append("div").attr("class","pill")
         .text(`全區間：${fmtDateTW(d3.min(segments, d=>d.start))} → ${fmtDateTW(d3.max(segments, d=>d.end))}`);
-      meta.append("div").attr("class","pill").text(`視窗：約 ${WINDOW_YEARS} 年（可拖曳平移 / 滾輪縮放）`);
+      meta.append("div").attr("class","pill").text(`視窗：約 ${WINDOW_YEARS} 年（拖曳平移 / 滾輪縮放）`);
+      meta.append("div").attr("class","pill").text(`點選梯形可固定顯示人物資訊`);
 
-      // 顏色：country 對應（穩定的類別色盤）；Male 強制藍色
-      const countries = Array.from(new Set(segments.map(d => d.country || "Unknown")));
-      const countryColor = d3.scaleOrdinal()
-        .domain(countries)
-        .range(d3.schemeTableau10.concat(d3.schemeSet3).concat(d3.schemePaired));
-
-      const MALE_BLUE = "#1f77b4"; // d3 tableau blue
-
-      // y domain（全資料）
       const yMin = d3.min(segments, d => Math.min(d.ageStart, d.ageEnd)) - 0.3;
       const yMax = d3.max(segments, d => Math.max(d.ageStart, d.ageEnd)) + 0.3;
 
-      // x domain（全資料）
       const xFullMin = d3.min(segments, d => d.start);
       const xFullMax = d3.max(segments, d => d.end);
 
-      // 預設視窗：從 SERIES_START 開始往後 10 年（若資料不足則 clamp）
       const initialStart = parseISODate(SERIES_START_STR) || xFullMin;
       const initialEnd = new Date(Date.UTC(
         initialStart.getUTCFullYear() + WINDOW_YEARS,
@@ -215,10 +250,8 @@
       const xInitMin = (initialStart < xFullMin) ? xFullMin : initialStart;
       const xInitMax = (initialEnd > xFullMax) ? xFullMax : initialEnd;
 
-      // base scales
       const xBase = d3.scaleTime().domain([xFullMin, xFullMax]).range([0, innerW]);
       const x = d3.scaleTime().domain([xInitMin, xInitMax]).range([0, innerW]);
-
       const y = d3.scaleLinear().domain([yMin, yMax]).nice().range([innerH, 0]);
 
       const svg = d3.select("#chart")
@@ -229,7 +262,7 @@
 
       const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-      // clip（避免拖曳時圖形跑出繪圖區）
+      // clip
       const clipId = "clip-plot";
       svg.append("defs")
         .append("clipPath")
@@ -240,21 +273,18 @@
         .attr("width", innerW)
         .attr("height", innerH);
 
-      // grid（y 固定不用重算）
-      const gridG = g.append("g")
+      g.append("g")
         .attr("class","grid")
         .call(d3.axisLeft(y).ticks(8).tickSize(-innerW).tickFormat(""));
 
-      // axes
       const xAxisG = g.append("g")
         .attr("class","axis")
         .attr("transform", `translate(0,${innerH})`);
 
-      const yAxisG = g.append("g")
+      g.append("g")
         .attr("class","axis")
         .call(d3.axisLeft(y).ticks(8));
 
-      // labels
       g.append("text")
         .attr("class","label")
         .attr("x", innerW)
@@ -269,82 +299,45 @@
         .attr("text-anchor", "start")
         .text("年齡（年）");
 
-      // plot layers（都放在 clip 裡）
       const plot = g.append("g").attr("clip-path", `url(#${clipId})`);
 
-      // area generator（每段兩點，向下填到底部 innerH，形成梯形）
       const areaGen = d3.area()
         .x(d => x(d.date))
         .y0(innerH)
         .y1(d => y(d.age))
         .curve(d3.curveLinear);
 
-      // line generator
       const lineGen = d3.line()
         .x(d => x(d.date))
         .y(d => y(d.age))
         .curve(d3.curveLinear);
 
-      // 轉成兩點資料，方便 area/line
       function segToPoints(s){
-        return [
-          { date: s.start, age: s.ageStart },
-          { date: s.end, age: s.ageEnd }
-        ];
+        return [{ date: s.start, age: s.ageStart }, { date: s.end, age: s.ageEnd }];
       }
 
-      // groups
       const areasG = plot.append("g");
       const linesG = plot.append("g");
       const endDotsG = plot.append("g");
 
-      function segStroke(s){
-        if (s.male) return MALE_BLUE;
-        return countryColor(s.country || "Unknown");
-      }
-      function segFill(s){
-        if (s.male) return MALE_BLUE;
-        return countryColor(s.country || "Unknown");
-      }
+      function segColor(s){ return colorOfCountry(s.country || "Unknown"); }
 
       function render(){
-        // axis update
         xAxisG.call(d3.axisBottom(x).ticks(7));
 
-        // areas (shadow trapezoids)
+        // areas (clickable)
         areasG.selectAll("path.area")
           .data(segments, d => d.name + "|" + d.start.toISOString())
           .join("path")
           .attr("class","area")
           .attr("d", d => areaGen(segToPoints(d)))
-          .attr("fill", d => segFill(d))
-          .attr("fill-opacity", 0.18);
-
-        // lines
-        linesG.selectAll("path.line")
-          .data(segments, d => d.name + "|" + d.start.toISOString())
-          .join("path")
-          .attr("class","line")
-          .attr("d", d => lineGen(segToPoints(d)))
-          .attr("fill", "none")
-          .attr("stroke", d => segStroke(d))
-          .attr("stroke-width", 2.2)
-          .attr("stroke-linecap", "round");
-
-        // end dots (highest point at end)
-        endDotsG.selectAll("circle.enddot")
-          .data(segments, d => d.name + "|" + d.start.toISOString())
-          .join("circle")
-          .attr("class","enddot")
-          .attr("cx", d => x(d.end))
-          .attr("cy", d => y(d.ageEnd))
-          .attr("r", 4.8)
-          .attr("fill", "#fff")
-          .attr("stroke", d => segStroke(d))
-          .attr("stroke-width", 2.2);
-
-        // tooltip interactions (attach to lines + dots)
-        linesG.selectAll("path.line")
+          .attr("fill", d => segColor(d))
+          .attr("fill-opacity", 0.18)
+          .style("cursor","pointer")
+          .on("click", (event, d) => {
+            event.stopPropagation(); // 不要被背景 click 關掉
+            showSelection(d);
+          })
           .on("mousemove", (event, d) => {
             tooltip
               .style("opacity", 1)
@@ -354,13 +347,39 @@
                 <div style="font-weight:700; margin-bottom:6px;">${d.name}${d.male ? "（Male）" : ""}</div>
                 <div>區間：${fmtDateTW(d.start)} → ${fmtDateTW(d.end)}</div>
                 <div>年齡：${d.ageStart.toFixed(3)} → ${d.ageEnd.toFixed(3)} 年</div>
-                ${d.country ? `<div style="opacity:.85;">國家：${d.country}</div>` : ""}
-                ${d.note ? `<div style="opacity:.85;">註記：${d.note}</div>` : ""}
+                <div style="opacity:.85;">點一下可固定顯示</div>
               `);
           })
           .on("mouseleave", () => tooltip.style("opacity", 0));
 
+        // lines
+        linesG.selectAll("path.line")
+          .data(segments, d => d.name + "|" + d.start.toISOString())
+          .join("path")
+          .attr("class","line")
+          .attr("d", d => lineGen(segToPoints(d)))
+          .attr("fill", "none")
+          .attr("stroke", d => segColor(d))
+          .attr("stroke-width", 2.2)
+          .attr("stroke-linecap", "round")
+          .style("pointer-events","none"); // 避免搶走 area 的 click
+
+        // end dots：male 實心，其他空心
         endDotsG.selectAll("circle.enddot")
+          .data(segments, d => d.name + "|" + d.start.toISOString())
+          .join("circle")
+          .attr("class","enddot")
+          .attr("cx", d => x(d.end))
+          .attr("cy", d => y(d.ageEnd))
+          .attr("r", 4.8)
+          .attr("fill", d => d.male ? segColor(d) : "#fff")
+          .attr("stroke", d => segColor(d))
+          .attr("stroke-width", 2.2)
+          .style("cursor","pointer")
+          .on("click", (event, d) => {
+            event.stopPropagation();
+            showSelection(d);
+          })
           .on("mousemove", (event, d) => {
             tooltip
               .style("opacity", 1)
@@ -368,20 +387,17 @@
               .style("top", event.clientY + "px")
               .html(`
                 <div style="font-weight:700; margin-bottom:6px;">${d.name}${d.male ? "（Male）" : ""}</div>
-                <div>結束點（最高點）：${fmtDateTW(d.end)}</div>
+                <div>結束點：${fmtDateTW(d.end)}</div>
                 <div>當天年齡：約 ${d.ageEnd.toFixed(3)} 年</div>
-                ${d.country ? `<div style="opacity:.85;">國家：${d.country}</div>` : ""}
+                <div style="opacity:.85;">點一下可固定顯示</div>
               `);
           })
           .on("mouseleave", () => tooltip.style("opacity", 0));
       }
 
-      // 初次 render
       render();
 
-      // zoom/pan：只在 x 軸上操作
-      // 目標：預設約 10 年視窗；可左右拖曳；滾輪縮放
-      // scaleExtent: 最小 1（全靠初始 domain 控制），最大依全域/視窗比
+      // zoom/pan (x only)
       const fullSpan = xFullMax - xFullMin;
       const initSpan = xInitMax - xInitMin;
       const maxK = Math.max(1, fullSpan / initSpan);
@@ -391,51 +407,66 @@
         .translateExtent([[0, 0], [innerW, innerH]])
         .extent([[0, 0], [innerW, innerH]])
         .on("zoom", (event) => {
-          // 用 base scale rescale，然後把 domain 更新到 x
           const zx = event.transform.rescaleX(xBase);
           x.domain(zx.domain());
           render();
         });
 
-      // 將 zoom 行為掛到 svg 的 plot 區域（不含 margin）
-      // 用一個透明 rect 接收事件
-      plot.append("rect")
-        .attr("x", 0)
-        .attr("y", 0)
-        .attr("width", innerW)
-        .attr("height", innerH)
+      // 透明 rect 接收 zoom/pan + 背景 click
+      const bg = plot.append("rect")
+        .attr("x", 0).attr("y", 0)
+        .attr("width", innerW).attr("height", innerH)
         .attr("fill", "transparent")
         .style("cursor", "grab")
         .call(zoom)
         .on("mousedown", function(){ d3.select(this).style("cursor","grabbing"); })
-        .on("mouseup", function(){ d3.select(this).style("cursor","grab"); });
+        .on("mouseup", function(){ d3.select(this).style("cursor","grab"); })
+        .on("click", () => hideSelection()); // 點空白關閉
 
-      // 將 zoom 初始化到「約 10 年視窗」
-      // 透過設定 transform，使目前 x(domain) = xInit
-      // k = fullSpan / initSpan，平移用 xBase 映射起點
+      // 初始化到約 10 年視窗
       const k0 = fullSpan / initSpan;
       const tx0 = -xBase(xInitMin) * k0;
       const t0 = d3.zoomIdentity.translate(tx0, 0).scale(k0);
-      plot.select("rect").call(zoom.transform, t0);
+      bg.call(zoom.transform, t0);
+
+      // ESC 關閉 selection
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") hideSelection();
+      }, { passive: true });
     }
 
     async function main(){
       try{
-        const res = await fetch(DATA_URL, { cache: "no-store" });
-        if (!res.ok) throw new Error(`fetch ${DATA_URL} 失敗：HTTP ${res.status}`);
-        const raw = await res.json();
+        const [dataRes, colorRes] = await Promise.all([
+          fetch(DATA_URL, { cache: "no-store" }),
+          fetch(COLORS_URL, { cache: "no-store" })
+        ]);
+
+        if (!dataRes.ok) throw new Error(`fetch ${DATA_URL} 失敗：HTTP ${dataRes.status}`);
+
+        const raw = await dataRes.json();
         const segments = validateAndNormalize(raw);
-        draw(segments);
+
+        // country colors：若讀不到，就用空 object（會 fallback）
+        let countryColors = {};
+        if (colorRes.ok) {
+          countryColors = await colorRes.json();
+        } else {
+          console.warn(`fetch ${COLORS_URL} 失敗：HTTP ${colorRes.status}，將使用 fallback 色盤`);
+        }
+
+        const colorOfCountry = buildColorFn(segments, countryColors);
+        draw(segments, colorOfCountry);
       }catch(e){
         console.error(e);
         showError(
-          "讀取/解析 data.json 失敗：\n" +
+          "讀取/解析 data.json / country_colors.json 失敗：\n" +
           (e?.message || String(e)) +
           "\n\n檢查：\n" +
-          "1) index.html 與 data.json 是否同資料夾\n" +
+          "1) 三個檔案是否同資料夾：index.html、data.json、country_colors.json\n" +
           "2) 是否用 http://localhost 方式開啟（不要 file://）\n" +
-          "3) 日期是否為 YYYY-MM-DD，end 可為 null\n" +
-          "4) end: null 只能在最後一筆"
+          "3) data.json：日期 YYYY-MM-DD、end 可為 null，且 end:null 只能在最後一筆\n" +
+          "4) country_colors.json：必須是 { \"Country\": \"#RRGGBB\" } 的物件"
         );
       }
     }
